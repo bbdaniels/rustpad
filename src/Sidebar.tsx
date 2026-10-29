@@ -20,6 +20,8 @@ import User from "./User";
 import languages from "./languages.json";
 import type { UserInfo } from "./rustpad";
 
+type WordWrap = "off" | "on" | "wordWrapColumn" | "bounded";
+
 export type SidebarProps = {
   documentId: string;
   connection: "connected" | "disconnected" | "desynchronized";
@@ -28,6 +30,8 @@ export type SidebarProps = {
   currentUser: UserInfo;
   users: Record<number, UserInfo>;
   onDarkModeChange: () => void;
+  wordWrap: WordWrap;
+  onWordWrapChange: (wordWrap: WordWrap) => void;
   onLanguageChange: (language: string) => void;
   onLoadSample: () => void;
   onChangeName: (name: string) => void;
@@ -42,6 +46,8 @@ function Sidebar({
   currentUser,
   users,
   onDarkModeChange,
+  wordWrap,
+  onWordWrapChange,
   onLanguageChange,
   onLoadSample,
   onChangeName,
@@ -79,6 +85,23 @@ function Sidebar({
         <Heading size="sm">Dark Mode</Heading>
         <Switch isChecked={darkMode} onChange={onDarkModeChange} />
       </Flex>
+
+      <Heading mt={4} mb={1.5} size="sm">
+        Word Wrap
+      </Heading>
+      <Select
+        size="sm"
+        bgColor={darkMode ? "#3c3c3c" : "white"}
+        borderColor={darkMode ? "#3c3c3c" : "white"}
+        value={wordWrap}
+        onChange={(event) => onWordWrapChange(event.target.value as WordWrap)}
+      >
+        {(["off", "on", "wordWrapColumn", "bounded"] as const).map((value) => (
+          <option key={value} value={value} style={{ color: "black" }}>
+            {value}
+          </option>
+        ))}
+      </Select>
 
       <Heading mt={4} mb={1.5} size="sm">
         Language

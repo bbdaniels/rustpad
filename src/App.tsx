@@ -14,6 +14,8 @@ import languages from "./languages.json";
 import Rustpad, { UserInfo } from "./rustpad";
 import useHash from "./useHash";
 
+type WordWrap = editor.IStandaloneEditorConstructionOptions["wordWrap"];
+
 function getWsUri(id: string) {
   let url = new URL(`api/socket/${id}`, window.location.href);
   url.protocol = url.protocol == "https:" ? "wss:" : "ws:";
@@ -45,6 +47,10 @@ function App() {
   const [darkMode, setDarkMode] = useLocalStorageState("darkMode", {
     defaultValue: false,
   });
+  const [wordWrap, setWordWrap] = useLocalStorageState<WordWrap>("wordWrap", {
+    defaultValue: "on",
+  });
+  const currentWordWrap = wordWrap ?? "on";
   const rustpad = useRef<Rustpad>();
   const id = useHash();
 
@@ -164,6 +170,8 @@ function App() {
           currentUser={{ name, hue }}
           users={users}
           onDarkModeChange={handleDarkModeChange}
+          wordWrap={currentWordWrap}
+          onWordWrapChange={setWordWrap}
           onLanguageChange={handleLanguageChange}
           onLoadSample={() => handleLoadSample(false)}
           onChangeName={(name) => name.length > 0 && setName(name)}
@@ -201,6 +209,7 @@ function App() {
               options={{
                 automaticLayout: true,
                 fontSize: 13,
+                wordWrap: currentWordWrap,
               }}
               onMount={(editor) => setEditor(editor)}
             />
