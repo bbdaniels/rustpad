@@ -9,8 +9,9 @@ FROM rust:alpine AS wasm
 WORKDIR /home/rust/src
 RUN apk --no-cache add curl musl-dev
 RUN curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+RUN cargo install wasm-bindgen-cli --version 0.2.92 --locked
 COPY . .
-RUN wasm-pack build rustpad-wasm
+RUN wasm-pack build --mode no-install rustpad-wasm
 
 FROM node:lts-alpine AS frontend
 WORKDIR /usr/src/app
