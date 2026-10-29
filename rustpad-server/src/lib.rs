@@ -194,6 +194,10 @@ const HOUR: Duration = Duration::from_secs(3600);
 
 /// Reclaims memory for documents.
 async fn cleaner(state: ServerState, expiry_days: u32) {
+    if expiry_days == 0 {
+        info!("document expiry disabled");
+        return;
+    }
     loop {
         time::sleep(HOUR).await;
         let mut keys = Vec::new();
