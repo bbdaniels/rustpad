@@ -30,6 +30,15 @@ function generateHue() {
   return Math.floor(Math.random() * 360);
 }
 
+function getStoredName(id: string) {
+  try {
+    const stored = window.localStorage.getItem(`name:${id}`);
+    return stored === null ? generateName() : JSON.parse(stored);
+  } catch {
+    return generateName();
+  }
+}
+
 function App() {
   const toast = useToast();
   const id = useHash();
@@ -38,9 +47,7 @@ function App() {
     "connected" | "disconnected" | "desynchronized"
   >("disconnected");
   const [users, setUsers] = useState<Record<number, UserInfo>>({});
-  const [name, setName] = useLocalStorageState(`name:${id}`, {
-    defaultValue: generateName,
-  });
+  const [name, setName] = useState(() => getStoredName(id));
   const [hue, setHue] = useLocalStorageState("hue", {
     defaultValue: generateHue,
   });
@@ -55,6 +62,17 @@ function App() {
   const rustpad = useRef<Rustpad>();
 
   const [readCodeConfirmOpen, setReadCodeConfirmOpen] = useState(false);
+
+  useEffect(() => {
+    setName(getStoredName(id));
+  }, [id]);
+
+  function handleNameChange(name: string) {
+    if (name.length > 0) {
+      setName(name);
+      window.localStorage.setItem(`name:${id}`, JSON.stringify(name));
+    }
+  }
 
   useEffect(() => {
     if (editor?.getModel()) {
@@ -174,7 +192,7 @@ function App() {
           onWordWrapChange={setWordWrap}
           onLanguageChange={handleLanguageChange}
           onLoadSample={() => handleLoadSample(false)}
-          onChangeName={(name) => name.length > 0 && setName(name)}
+          onChangeName={handleNameChange}
           onChangeColor={() => setHue(generateHue())}
         />
         <ReadCodeConfirm
