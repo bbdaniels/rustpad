@@ -4,6 +4,7 @@ RUN apk --no-cache add musl-dev openssl-dev
 COPY . .
 RUN cargo test --release
 RUN cargo build --release
+RUN mkdir -p /home/rust/data && chown 1000:1000 /home/rust/data
 
 FROM rust:alpine AS wasm
 WORKDIR /home/rust/src
@@ -27,5 +28,6 @@ RUN npm run build
 FROM scratch
 COPY --from=frontend /usr/src/app/dist dist
 COPY --from=backend /home/rust/src/target/release/rustpad-server .
+COPY --chown=1000:1000 --from=backend /home/rust/data /data
 USER 1000:1000
 CMD [ "./rustpad-server" ]
