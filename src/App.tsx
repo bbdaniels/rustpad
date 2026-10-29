@@ -32,12 +32,13 @@ function generateHue() {
 
 function App() {
   const toast = useToast();
+  const id = useHash();
   const [language, setLanguage] = useState("plaintext");
   const [connection, setConnection] = useState<
     "connected" | "disconnected" | "desynchronized"
   >("disconnected");
   const [users, setUsers] = useState<Record<number, UserInfo>>({});
-  const [name, setName] = useLocalStorageState("name", {
+  const [name, setName] = useLocalStorageState(`name:${id}`, {
     defaultValue: generateName,
   });
   const [hue, setHue] = useLocalStorageState("hue", {
@@ -52,7 +53,6 @@ function App() {
   });
   const currentWordWrap = wordWrap ?? "on";
   const rustpad = useRef<Rustpad>();
-  const id = useHash();
 
   const [readCodeConfirmOpen, setReadCodeConfirmOpen] = useState(false);
 
