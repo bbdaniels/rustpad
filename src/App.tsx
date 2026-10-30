@@ -228,7 +228,7 @@ function App() {
                 automaticLayout: true,
                 fontSize: 13,
                 wordWrap: currentWordWrap,
-                wrappingIndent: language === "markdown" ? "deepIndent" : "same",
+                wrappingIndent: language === "markdown" ? "indent" : "same",
               }}
               onMount={(editor) => setEditor(editor)}
             />
