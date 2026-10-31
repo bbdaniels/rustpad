@@ -1,3 +1,16 @@
 body {
   overscroll-behavior: none;
 }
+
+/* On iOS, Monaco opens the keyboard only through its own keyboard button
+   (iPadShowKeyboard, created only on iOS): a tap on the text focuses the
+   editor without a keyboard in every iOS browser. Monaco places the button
+   at the editor's top right, which is not on screen in Arc on an iPhone, so
+   pin it to the screen's top right, just inside the editor. Fixed position
+   escapes the editor's overflow clipping; no ancestor sets a transform. */
+.monaco-editor .iPadShowKeyboard {
+  position: fixed !important;
+  top: calc(env(safe-area-inset-top, 0px) + 56px) !important;
+  right: max(12px, env(safe-area-inset-right, 0px)) !important;
+  z-index: 10;
+}
