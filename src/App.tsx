@@ -1,6 +1,16 @@
-import { Box, Flex, HStack, Icon, Text, useToast } from "@chakra-ui/react";
+import {
+  Box,
+  Flex,
+  HStack,
+  Icon,
+  IconButton,
+  Spacer,
+  Text,
+  useToast,
+} from "@chakra-ui/react";
 import { EditorView } from "@codemirror/view";
 import { useEffect, useRef, useState } from "react";
+import { MdKeyboard, MdKeyboardHide } from "react-icons/md";
 import { VscChevronRight, VscFolderOpened, VscGist } from "react-icons/vsc";
 import useLocalStorageState from "use-local-storage-state";
 
@@ -8,13 +18,13 @@ import rustpadRaw from "../rustpad-server/src/rustpad.rs?raw";
 import Footer from "./Footer";
 import ReadCodeConfirm from "./ReadCodeConfirm";
 import Sidebar, { WordWrap } from "./Sidebar";
+import animals from "./animals.json";
 import {
   createEditor,
   setEditorDarkMode,
   setEditorLanguage,
   setEditorWrap,
 } from "./editor";
-import animals from "./animals.json";
 import languages from "./languages.json";
 import Rustpad, { UserInfo } from "./rustpad";
 import useHash from "./useHash";
@@ -42,6 +52,9 @@ function getStoredName(id: string) {
   }
 }
 
+/** Touch screens, where the on-screen keyboard has no button of its own to hide it. */
+const touchScreen = window.matchMedia("(pointer: coarse)").matches;
+
 function App() {
   const toast = useToast();
   const id = useHash();
@@ -56,6 +69,7 @@ function App() {
   });
   const [editor, setEditor] = useState<EditorView>();
   const editorParent = useRef<HTMLDivElement>(null);
+  const [editorFocused, setEditorFocused] = useState(false);
   const [darkMode, setDarkMode] = useLocalStorageState("darkMode", {
     defaultValue: false,
   });
@@ -84,6 +98,25 @@ function App() {
     setEditor(view);
     return () => view.destroy();
   }, []);
+
+  useEffect(() => {
+    if (!editor) return;
+    const content = editor.contentDOM;
+    const onFocus = () => setEditorFocused(true);
+    const onBlur = () => setEditorFocused(false);
+    content.addEventListener("focus", onFocus);
+    content.addEventListener("blur", onBlur);
+    return () => {
+      content.removeEventListener("focus", onFocus);
+      content.removeEventListener("blur", onBlur);
+    };
+  }, [editor]);
+
+  function handleKeyboardToggle() {
+    if (!editor) return;
+    if (editorFocused) editor.contentDOM.blur();
+    else editor.focus();
+  }
 
   useEffect(() => {
     if (editor) setEditorLanguage(editor, language);
@@ -239,6 +272,22 @@ function App() {
             <Icon as={VscChevronRight} fontSize="md" />
             <Icon as={VscGist} fontSize="md" color="purple.500" />
             <Text>{id}</Text>
+            {touchScreen && (
+              <>
+                <Spacer />
+                <IconButton
+                  aria-label={editorFocused ? "Hide keyboard" : "Show keyboard"}
+                  icon={editorFocused ? <MdKeyboardHide /> : <MdKeyboard />}
+                  size="xs"
+                  fontSize="lg"
+                  variant="ghost"
+                  color="#888888"
+                  // Keep the editor focused through the tap; the click decides.
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={handleKeyboardToggle}
+                />
+              </>
+            )}
           </HStack>
           <Box flex={1} minH={0} ref={editorParent} />
         </Flex>
