@@ -20,7 +20,7 @@ import User from "./User";
 import languages from "./languages.json";
 import type { UserInfo } from "./rustpad";
 
-type WordWrap = "off" | "on" | "wordWrapColumn" | "bounded";
+export type WordWrap = "off" | "on";
 
 export type SidebarProps = {
   documentId: string;
@@ -96,7 +96,7 @@ function Sidebar({
         value={wordWrap}
         onChange={(event) => onWordWrapChange(event.target.value as WordWrap)}
       >
-        {(["off", "on", "wordWrapColumn", "bounded"] as const).map((value) => (
+        {(["off", "on"] as const).map((value) => (
           <option key={value} value={value} style={{ color: "black" }}>
             {value}
           </option>

@@ -1,6 +1,5 @@
 import { Box, Flex, HStack, Icon, Text, useToast } from "@chakra-ui/react";
-import Editor from "@monaco-editor/react";
-import { editor } from "monaco-editor/esm/vs/editor/editor.api";
+import { EditorView } from "@codemirror/view";
 import { useEffect, useRef, useState } from "react";
 import { VscChevronRight, VscFolderOpened, VscGist } from "react-icons/vsc";
 import useLocalStorageState from "use-local-storage-state";
@@ -8,13 +7,17 @@ import useLocalStorageState from "use-local-storage-state";
 import rustpadRaw from "../rustpad-server/src/rustpad.rs?raw";
 import Footer from "./Footer";
 import ReadCodeConfirm from "./ReadCodeConfirm";
-import Sidebar from "./Sidebar";
+import Sidebar, { WordWrap } from "./Sidebar";
+import {
+  createEditor,
+  setEditorDarkMode,
+  setEditorLanguage,
+  setEditorWrap,
+} from "./editor";
 import animals from "./animals.json";
 import languages from "./languages.json";
 import Rustpad, { UserInfo } from "./rustpad";
 import useHash from "./useHash";
-
-type WordWrap = editor.IStandaloneEditorConstructionOptions["wordWrap"];
 
 function getWsUri(id: string) {
   let url = new URL(`api/socket/${id}`, window.location.href);
@@ -51,14 +54,16 @@ function App() {
   const [hue, setHue] = useLocalStorageState("hue", {
     defaultValue: generateHue,
   });
-  const [editor, setEditor] = useState<editor.IStandaloneCodeEditor>();
+  const [editor, setEditor] = useState<EditorView>();
+  const editorParent = useRef<HTMLDivElement>(null);
   const [darkMode, setDarkMode] = useLocalStorageState("darkMode", {
     defaultValue: false,
   });
   const [wordWrap, setWordWrap] = useLocalStorageState<WordWrap>("wordWrap", {
     defaultValue: "on",
   });
-  const currentWordWrap = wordWrap ?? "on";
+  // Monaco's "wordWrapColumn" and "bounded", stored by earlier versions, wrap.
+  const currentWordWrap: WordWrap = wordWrap === "off" ? "off" : "on";
   const rustpad = useRef<Rustpad>();
 
   const [readCodeConfirmOpen, setReadCodeConfirmOpen] = useState(false);
@@ -75,10 +80,30 @@ function App() {
   }
 
   useEffect(() => {
-    if (editor?.getModel()) {
-      const model = editor.getModel()!;
-      model.setValue("");
-      model.setEOL(0); // LF
+    const view = createEditor(editorParent.current!);
+    setEditor(view);
+    return () => view.destroy();
+  }, []);
+
+  useEffect(() => {
+    if (editor) setEditorLanguage(editor, language);
+  }, [editor, language]);
+
+  useEffect(() => {
+    if (editor) setEditorDarkMode(editor, darkMode);
+  }, [editor, darkMode]);
+
+  useEffect(() => {
+    if (editor) {
+      setEditorWrap(editor, currentWordWrap === "on", language === "markdown");
+    }
+  }, [editor, currentWordWrap, language]);
+
+  useEffect(() => {
+    if (editor) {
+      editor.dispatch({
+        changes: { from: 0, to: editor.state.doc.length, insert: "" },
+      });
       rustpad.current = new Rustpad({
         uri: getWsUri(id),
         editor,
@@ -135,22 +160,17 @@ function App() {
   }
 
   function handleLoadSample(confirmed: boolean) {
-    if (editor?.getModel()) {
-      const model = editor.getModel()!;
-      const range = model.getFullModelRange();
-
+    if (editor) {
       // If there are at least 10 lines of code, ask for confirmation.
-      if (range.endLineNumber >= 10 && !confirmed) {
+      if (editor.state.doc.lines >= 10 && !confirmed) {
         setReadCodeConfirmOpen(true);
         return;
       }
 
-      model.pushEditOperations(
-        editor.getSelections(),
-        [{ range, text: rustpadRaw }],
-        () => null,
-      );
-      editor.setPosition({ column: 0, lineNumber: 0 });
+      editor.dispatch({
+        changes: { from: 0, to: editor.state.doc.length, insert: rustpadRaw },
+        selection: { anchor: 0 },
+      });
       if (language !== "rust") {
         handleLanguageChange("rust");
       }
@@ -220,19 +240,7 @@ function App() {
             <Icon as={VscGist} fontSize="md" color="purple.500" />
             <Text>{id}</Text>
           </HStack>
-          <Box flex={1} minH={0}>
-            <Editor
-              theme={darkMode ? "vs-dark" : "vs"}
-              language={language}
-              options={{
-                automaticLayout: true,
-                fontSize: 13,
-                wordWrap: currentWordWrap,
-                wrappingIndent: language === "markdown" ? "indent" : "same",
-              }}
-              onMount={(editor) => setEditor(editor)}
-            />
-          </Box>
+          <Box flex={1} minH={0} ref={editorParent} />
         </Flex>
       </Flex>
       <Footer />

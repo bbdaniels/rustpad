@@ -22,8 +22,10 @@ The server is written in Rust using the
 library. We use [wasm-bindgen](https://github.com/rustwasm/wasm-bindgen) to
 compile text operation logic to WebAssembly code, which runs in the browser. The
 frontend is written in TypeScript using [React](https://reactjs.org/) and
-interfaces with [Monaco](https://github.com/microsoft/monaco-editor), the text
-editor that powers VS Code.
+interfaces with [CodeMirror 6](https://codemirror.net/), which works on phones
+as well as desktops (this fork replaced Monaco, which opens no keyboard when the
+text is tapped on iOS). `npm test` checks the conversions between CodeMirror's
+changes and the server's operations.
 
 Architecturally, client-side code communicates via WebSocket with a central
 server that stores in-memory data structures. This makes the editor very fast,

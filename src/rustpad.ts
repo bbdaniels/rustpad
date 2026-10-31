@@ -1,15 +1,32 @@
+import {
+  Annotation,
+  Compartment,
+  StateEffect,
+  StateField,
+  Transaction,
+} from "@codemirror/state";
+import {
+  Decoration,
+  DecorationSet,
+  EditorView,
+  ViewUpdate,
+  WidgetType,
+} from "@codemirror/view";
 import debounce from "lodash.debounce";
-import type {
-  IDisposable,
-  IPosition,
-  editor,
-} from "monaco-editor/esm/vs/editor/editor.api";
 import { OpSeq } from "rustpad-wasm";
+
+import {
+  Step,
+  changesToSteps,
+  stepsToChanges,
+  unicodeOffset,
+  unicodePosition,
+} from "./ot";
 
 /** Options passed in to the Rustpad constructor. */
 export type RustpadOptions = {
   readonly uri: string;
-  readonly editor: editor.IStandaloneCodeEditor;
+  readonly editor: EditorView;
   readonly onConnected?: () => void;
   readonly onDisconnected?: () => void;
   readonly onDesynchronized?: () => void;
@@ -29,10 +46,8 @@ class Rustpad {
   private ws?: WebSocket;
   private connecting?: boolean;
   private recentFailures: number = 0;
-  private readonly model: editor.ITextModel;
-  private readonly onChangeHandle: IDisposable;
-  private readonly onCursorHandle: IDisposable;
-  private readonly onSelectionHandle: IDisposable;
+  private readonly view: EditorView;
+  private readonly listener = new Compartment();
   private readonly beforeUnload: (event: BeforeUnloadEvent) => void;
   private readonly tryConnectId: number;
   private readonly resetFailuresId: number;
@@ -47,24 +62,19 @@ class Rustpad {
   private myInfo?: UserInfo;
   private cursorData: CursorData = { cursors: [], selections: [] };
 
-  // Intermittent local editor state
-  private lastValue: string = "";
-  private ignoreChanges: boolean = false;
-  private oldDecorations: string[] = [];
-
   constructor(readonly options: RustpadOptions) {
-    this.model = options.editor.getModel()!;
-    this.onChangeHandle = options.editor.onDidChangeModelContent((e) =>
-      this.onChange(e),
-    );
+    this.view = options.editor;
     const cursorUpdate = debounce(() => this.sendCursorData(), 20);
-    this.onCursorHandle = options.editor.onDidChangeCursorPosition((e) => {
-      this.onCursor(e);
-      cursorUpdate();
-    });
-    this.onSelectionHandle = options.editor.onDidChangeCursorSelection((e) => {
-      this.onSelection(e);
-      cursorUpdate();
+    this.view.dispatch({
+      effects: StateEffect.appendConfig.of(
+        this.listener.of([
+          remoteCursors,
+          EditorView.updateListener.of((update) => {
+            this.onUpdate(update);
+            if (update.selectionSet || update.docChanged) cursorUpdate();
+          }),
+        ]),
+      ),
     });
     this.beforeUnload = (event: BeforeUnloadEvent) => {
       if (this.outstanding) {
@@ -89,9 +99,7 @@ class Rustpad {
   dispose() {
     window.clearInterval(this.tryConnectId);
     window.clearInterval(this.resetFailuresId);
-    this.onSelectionHandle.dispose();
-    this.onCursorHandle.dispose();
-    this.onChangeHandle.dispose();
+    this.view.dispatch({ effects: this.listener.reconfigure([]) });
     window.removeEventListener("beforeunload", this.beforeUnload);
     this.ws?.close();
   }
@@ -235,7 +243,7 @@ class Rustpad {
     } else {
       this.buffer = this.buffer.compose(operation);
     }
-    this.transformCursors(operation);
+    this.transformCursorData(operation);
   }
 
   private sendOperation(operation: OpSeq) {
@@ -258,65 +266,17 @@ class Rustpad {
   private applyOperation(operation: OpSeq) {
     if (operation.is_noop()) return;
 
-    this.ignoreChanges = true;
-    const ops: (string | number)[] = JSON.parse(operation.to_string());
-    let index = 0;
+    const steps: Step[] = JSON.parse(operation.to_string());
+    this.view.dispatch({
+      changes: stepsToChanges(this.view.state.doc, steps),
+      annotations: [remote.of(true), Transaction.addToHistory.of(false)],
+    });
 
-    for (const op of ops) {
-      if (typeof op === "string") {
-        // Insert
-        const pos = unicodePosition(this.model, index);
-        index += unicodeLength(op);
-        this.model.pushEditOperations(
-          this.options.editor.getSelections(),
-          [
-            {
-              range: {
-                startLineNumber: pos.lineNumber,
-                startColumn: pos.column,
-                endLineNumber: pos.lineNumber,
-                endColumn: pos.column,
-              },
-              text: op,
-              forceMoveMarkers: true,
-            },
-          ],
-          () => null,
-        );
-      } else if (op >= 0) {
-        // Retain
-        index += op;
-      } else {
-        // Delete
-        const chars = -op;
-        var from = unicodePosition(this.model, index);
-        var to = unicodePosition(this.model, index + chars);
-        this.model.pushEditOperations(
-          this.options.editor.getSelections(),
-          [
-            {
-              range: {
-                startLineNumber: from.lineNumber,
-                startColumn: from.column,
-                endLineNumber: to.lineNumber,
-                endColumn: to.column,
-              },
-              text: "",
-              forceMoveMarkers: true,
-            },
-          ],
-          () => null,
-        );
-      }
-    }
-
-    this.lastValue = this.model.getValue();
-    this.ignoreChanges = false;
-
-    this.transformCursors(operation);
+    this.transformCursorData(operation);
+    this.updateCursors();
   }
 
-  private transformCursors(operation: OpSeq) {
+  private transformCursorData(operation: OpSeq) {
     for (const data of Object.values(this.userCursors)) {
       data.cursors = data.cursors.map((c) => operation.transform_index(c));
       data.selections = data.selections.map(([s, e]) => [
@@ -324,11 +284,15 @@ class Rustpad {
         operation.transform_index(e),
       ]);
     }
-    this.updateCursors();
   }
 
+  /**
+   * Redraws the other users' cursors and selections. Never called while the
+   * editor is updating (a local edit), when the field maps them instead.
+   */
   private updateCursors() {
-    const decorations: editor.IModelDeltaDecoration[] = [];
+    const doc = this.view.state.doc;
+    const decorations = [];
 
     for (const [id, data] of Object.entries(this.userCursors)) {
       if (id in this.users) {
@@ -336,94 +300,100 @@ class Rustpad {
         generateCssStyles(hue);
 
         for (const cursor of data.cursors) {
-          const position = unicodePosition(this.model, cursor);
-          decorations.push({
-            options: {
-              className: `remote-cursor-${hue}`,
-              stickiness: 1,
-              zIndex: 2,
-            },
-            range: {
-              startLineNumber: position.lineNumber,
-              startColumn: position.column,
-              endLineNumber: position.lineNumber,
-              endColumn: position.column,
-            },
-          });
+          const position = unicodePosition(doc, cursor);
+          decorations.push(
+            Decoration.widget({
+              widget: new RemoteCursor(hue, name),
+              side: 1,
+            }).range(position),
+          );
         }
         for (const selection of data.selections) {
-          const position = unicodePosition(this.model, selection[0]);
-          const positionEnd = unicodePosition(this.model, selection[1]);
-          decorations.push({
-            options: {
-              className: `remote-selection-${hue}`,
-              hoverMessage: {
-                value: name,
-              },
-              stickiness: 1,
-              zIndex: 1,
-            },
-            range: {
-              startLineNumber: position.lineNumber,
-              startColumn: position.column,
-              endLineNumber: positionEnd.lineNumber,
-              endColumn: positionEnd.column,
-            },
-          });
+          const from = unicodePosition(doc, selection[0]);
+          const to = unicodePosition(doc, selection[1]);
+          if (from < to) {
+            decorations.push(
+              Decoration.mark({
+                class: `remote-selection-${hue}`,
+                attributes: { title: name },
+              }).range(from, to),
+            );
+          }
         }
       }
     }
 
-    this.oldDecorations = this.model.deltaDecorations(
-      this.oldDecorations,
-      decorations,
-    );
+    this.view.dispatch({
+      effects: setRemoteCursors.of(Decoration.set(decorations, true)),
+    });
   }
 
-  private onChange(event: editor.IModelContentChangedEvent) {
-    if (!this.ignoreChanges) {
-      const content = this.lastValue;
-      const contentLength = unicodeLength(content);
-      let offset = 0;
-
-      let operation = OpSeq.new();
-      operation.retain(contentLength);
-      event.changes.sort((a, b) => b.rangeOffset - a.rangeOffset);
-      for (const change of event.changes) {
-        // The following dance is necessary to convert from UTF-16 indices (evil
-        // encoding-dependent JavaScript representation) to portable Unicode
-        // codepoint indices.
-        const { text, rangeOffset, rangeLength } = change;
-        const initialLength = unicodeLength(content.slice(0, rangeOffset));
-        const deletedLength = unicodeLength(
-          content.slice(rangeOffset, rangeOffset + rangeLength),
-        );
-        const restLength =
-          contentLength + offset - initialLength - deletedLength;
-        const changeOp = OpSeq.new();
-        changeOp.retain(initialLength);
-        changeOp.delete(deletedLength);
-        changeOp.insert(text);
-        changeOp.retain(restLength);
-        operation = operation.compose(changeOp)!;
-        offset += changeOp.target_len() - changeOp.base_len();
+  private onUpdate(update: ViewUpdate) {
+    for (const tr of update.transactions) {
+      if (tr.docChanged && !tr.annotation(remote)) {
+        const steps = changesToSteps(tr.startState.doc, tr.changes);
+        const operation = OpSeq.new();
+        for (const step of steps) {
+          if (typeof step === "string") operation.insert(step);
+          else if (step >= 0) operation.retain(step);
+          else operation.delete(-step);
+        }
+        this.applyClient(operation);
       }
-      this.applyClient(operation);
-      this.lastValue = this.model.getValue();
+    }
+    if (update.selectionSet || update.docChanged) {
+      const doc = update.state.doc;
+      const ranges = update.state.selection.ranges;
+      this.cursorData.cursors = ranges.map((r) => unicodeOffset(doc, r.head));
+      this.cursorData.selections = ranges.map((r) => [
+        unicodeOffset(doc, r.from),
+        unicodeOffset(doc, r.to),
+      ]);
     }
   }
+}
 
-  private onCursor(event: editor.ICursorPositionChangedEvent) {
-    const cursors = [event.position, ...event.secondaryPositions];
-    this.cursorData.cursors = cursors.map((p) => unicodeOffset(this.model, p));
+/** Marks the editor transactions that apply a remote operation. */
+const remote = Annotation.define<boolean>();
+
+const setRemoteCursors = StateEffect.define<DecorationSet>();
+
+/** The other users' cursors and selections, mapped through every edit. */
+const remoteCursors = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(decorations, tr) {
+    decorations = decorations.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (effect.is(setRemoteCursors)) decorations = effect.value;
+    }
+    return decorations;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/** A remote user's cursor: a colored bar named on hover. */
+class RemoteCursor extends WidgetType {
+  constructor(
+    readonly hue: number,
+    readonly name: string,
+  ) {
+    super();
   }
 
-  private onSelection(event: editor.ICursorSelectionChangedEvent) {
-    const selections = [event.selection, ...event.secondarySelections];
-    this.cursorData.selections = selections.map((s) => [
-      unicodeOffset(this.model, s.getStartPosition()),
-      unicodeOffset(this.model, s.getEndPosition()),
-    ]);
+  eq(other: RemoteCursor) {
+    return other.hue === this.hue && other.name === this.name;
+  }
+
+  toDOM() {
+    const element = document.createElement("span");
+    element.className = `remote-cursor remote-cursor-${this.hue}`;
+    element.title = this.name;
+    element.textContent = "\u2060";
+    return element;
+  }
+
+  ignoreEvent() {
+    return true;
   }
 }
 
@@ -454,34 +424,6 @@ type ServerMsg = {
   };
 };
 
-/** Returns the number of Unicode codepoints in a string. */
-function unicodeLength(str: string): number {
-  let length = 0;
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  for (const c of str) ++length;
-  return length;
-}
-
-/** Returns the number of Unicode codepoints before a position in the model. */
-function unicodeOffset(model: editor.ITextModel, pos: IPosition): number {
-  const value = model.getValue();
-  const offsetUTF16 = model.getOffsetAt(pos);
-  return unicodeLength(value.slice(0, offsetUTF16));
-}
-
-/** Returns the position after a certain number of Unicode codepoints. */
-function unicodePosition(model: editor.ITextModel, offset: number): IPosition {
-  const value = model.getValue();
-  let offsetUTF16 = 0;
-  for (const c of value) {
-    // Iterate over Unicode codepoints
-    if (offset <= 0) break;
-    offsetUTF16 += c.length;
-    offset -= 1;
-  }
-  return model.getPositionAt(offsetUTF16);
-}
-
 /** Cache for private use by `generateCssStyles()`. */
 const generatedStyles = new Set<number>();
 
@@ -490,10 +432,10 @@ function generateCssStyles(hue: number) {
   if (!generatedStyles.has(hue)) {
     generatedStyles.add(hue);
     const css = `
-      .monaco-editor .remote-selection-${hue} {
+      .cm-editor .remote-selection-${hue} {
         background-color: hsla(${hue}, 90%, 80%, 0.5);
       }
-      .monaco-editor .remote-cursor-${hue} {
+      .cm-editor .remote-cursor-${hue} {
         border-left: 2px solid hsl(${hue}, 90%, 25%);
       }
     `;
